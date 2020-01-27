@@ -128,8 +128,22 @@ class WorkPackages::UpdateAncestorsService
     leaves_count = leaves.size
 
     if leaves_count > 0
-      average = average_estimated_hours(leaves)
-      progress = done_ratio_sum(leaves, average) / (average * leaves_count)
+      average_story_points = average_story_points(leaves)
+      average_estimated_hours = average_estimated_hours(leaves)
+      
+      
+      # we take priority on story points for calculating average and 1 by default
+      average = 1
+      done_ratio_sum = 1
+      if average_story_points > 0
+        average = average_story_points
+        done_ratio_sum = done_ratio_sum(leaves, true)
+      elsif average_estimated_hours > 0
+        average = average_estimated_hours
+        done_ratio_sum = done_ratio_sum(leaves, false)
+      end
+
+      progress = done_ratio_sum / (average * leaves_count)
 
       progress.round(2)
     end
@@ -143,26 +157,56 @@ class WorkPackages::UpdateAncestorsService
     count = 1 if count.zero?
 
     average = sum / count
-
-    average.zero? ? 1 : average
   end
 
-  def done_ratio_sum(leaves, average_estimated_hours)
-    # Do not take into account estimated_hours when it is either nil or set to 0.0
-    summands = leaves.map do |leaf|
-      estimated_hours = if leaf.estimated_hours.to_f > 0
-                          leaf.estimated_hours
-                        else
-                          average_estimated_hours
-                        end
+  def average_story_points(leaves)
+    # 0 and nil shall be considered the same for estimated hours
+    sum = 0
+    leaves.map do |leaf|
+      sum = sum + leaf_story_points(leaf)
+    end
+    count = leaves.map.count
 
+    count = 1 if count.zero?
+
+    average = sum.to_f / count
+  end
+
+  def leaf_estimated_hours(leaf)
+    estimated_hours = if leaf.estimated_hours.to_f > 0
+      leaf.estimated_hours
+    else
+      0
+    end
+  end
+
+  def leaf_story_points(leaf)
+    if leaf[:story_points].present?
+      leaf.story_points
+    else
+      0
+    end
+  end
+
+  def done_ratio_sum(leaves, using_story_points)
+    summands = leaves.map do |leaf|
+      # calculate estimation either on story points or estimated hours
+      estimation = 1
+      if using_story_points
+        estimation = leaf_story_points(leaf)
+      else
+        estimation = leaf_estimated_hours(leaf)
+      end
+
+      # calculate done ratio
       done_ratio = if leaf.closed?
                      100
                    else
                      leaf.done_ratio || 0
                    end
 
-      estimated_hours * done_ratio
+      # return weighted done ratio if leaf is not a parent so we avoid counting twice
+      estimation * done_ratio
     end
 
     summands.sum
@@ -208,6 +252,6 @@ class WorkPackages::UpdateAncestorsService
   end
 
   def selected_leaf_attributes
-    %i(id done_ratio derived_estimated_hours estimated_hours status_id)
+    %i(id done_ratio derived_estimated_hours estimated_hours story_points status_id)
   end
 end
